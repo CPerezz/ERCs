@@ -21,7 +21,7 @@ From a user perspective, the controller NFT functions as a transferable wallet. 
 
 Ownership of the controlling NFT defines root control over the corresponding account. Transfer of the NFT rotates control to the new holder without moving assets held by the account and without the new holder needing access to the previous controller's keys. This enables full account transfer - including sale, gift, or organizational handoff - through a standard NFT transfer rather than through key sharing or signer-storage migration.
 
-As the account holds its assets directly, transferring the controlling NFT also transfers effective control of all assets in the account as a single atomic operation, rather than requiring individual transfers of each token, position, or balance. The account MAY hold ETH, [ERC-20](./eip-20), [ERC-721](./eip-721), [ERC-1155](./eip-1155), and other assets, and MUST support arbitrary execution and atomic batch execution.
+As the account holds its assets directly, transferring the controlling NFT transfers root execution authority over all assets in the account as a single atomic operation, rather than requiring individual transfers of each token, position, or balance. Token-level approvals ([ERC-20](./eip-20) `approve`, [ERC-721](./eip-721) `setApprovalForAll`, [ERC-1155](./eip-1155) operator approvals) that the account previously granted to third-party contracts survive the transfer and must be managed separately by the new controller. The account MAY hold ETH, [ERC-20](./eip-20), [ERC-721](./eip-721), [ERC-1155](./eip-1155), and other assets, and MUST support arbitrary execution and atomic batch execution.
 
 A single owner address MAY hold multiple controlling NFTs and therefore control multiple distinct NFT-controlled accounts. Because a compliant account MAY itself hold [ERC-721](./eip-721) assets, including controlling NFTs, an NFT-controlled account MAY itself control child NFT-controlled accounts. This permits hierarchical account trees.
 
@@ -37,7 +37,7 @@ This ERC separates control from custody. From a user perspective, holding the co
 
 ![Core architecture and control-vs-custody separation](../assets/erc-XXXX/control-architecture.svg)
 
-Control is not limited to one account. Any address MAY own multiple controller NFTs and therefore control multiple corresponding accounts. Because a compliant account MAY itself hold [ERC-721](./eip-721) tokens, including controller NFTs, one NFT-controlled account MAY itself become the controller of other NFT-controlled accounts. This enables nested account trees. Wallets and applications MAY present such hierarchies as folders, subaccounts, vaults, or another navigation metaphor, but this ERC standardizes only the control and execution semantics, not the UI metaphor.
+Control is not limited to one account. Any address MAY own multiple controller NFTs and therefore control multiple corresponding accounts. Because a compliant account MAY itself hold [ERC-721](./eip-721) tokens, including controller NFTs, one NFT-controlled account MAY itself become the controller of other NFT-controlled accounts. This enables nested account trees that naturally model corporate ownership structures: a corporate treasury or DAO controls subsidiary accounts for different operational functions, each with its own approval scope and risk profile, and transfer of a subsidiary's controller NFT to a new parent is a divestiture executed as a single NFT transfer while the subsidiary's assets, positions, and history remain intact. The same structure supports fund management: a parent account holds child-account controller NFTs representing different strategies or asset classes, and the entire fund can be transferred to a new manager through a single NFT transfer of the parent's controller token. Wallets and applications MAY present such hierarchies as folders, subaccounts, vaults, or another navigation metaphor, but this ERC standardizes only the control and execution semantics, not the UI metaphor.
 
 ![Hierarchical account tree and nesting](../assets/erc-XXXX/hierarchy-tree.svg)
 
@@ -49,7 +49,9 @@ This also complements session-key schemes. Session keys limit what a delegated s
 
 The separation is intentional. Transfer of the NFT rotates root control without moving assets held by the account; and thus "key-rotation" of a smart-account occurs via simply transferring the NFT to a new owner. The recipient gains full control without ever knowing or sharing the previous owner's keys. A user who wants to move from a hot wallet to a cold storage multisig, or from an EOA to a post-quantum signature scheme, transfers the NFT and is done - their Aave positions, Uniswap LP, Maker vault, ENS name, governance participation history, protocol allowlists, and every other address-based relationship remain at the same account address, now controlled by a different security model.
 
-This also enables account transfer as a first-class operation: an account with its full position history, token balances, protocol memberships, and address-based reputation can be sold, gifted, or handed off to a new controller through a single NFT transfer. Because assets remain at the account address, a single control rotation replaces what would otherwise require individual transfers of each balance and position, avoiding the gas cost, complexity, and failure risk of moving assets one by one.
+This also enables account transfer as a first-class operation: an account with its full position history, token balances, protocol memberships, and address-based reputation can be sold, gifted, or handed off to a new controller through a single NFT transfer. For example, when a DAO votes to change its treasury management committee, the outgoing committee transfers the controller NFT to the new multisig - the treasury address, its protocol positions, its allowlists, and its on-chain reputation all persist, replacing what would otherwise require multi-transaction, multi-governance-vote asset migration and updating every protocol integration that references the old address. Because assets remain at the account address, a single control rotation replaces what would otherwise require individual transfers of each balance and position, avoiding the gas cost, complexity, and failure risk of moving assets one by one.
+
+The same mechanism supports digital inheritance: the controller NFT can be held by a dead man's switch contract or a multisig with designated heirs, so that a user's entire on-chain estate -- assets, positions, memberships, and address-based identity -- transfers to a successor through a single NFT transfer rather than requiring shared seed phrases or centralized custodians. More generally, because the controller NFT is a standard [ERC-721](./eip-721) token, it can be held by any contract -- a vesting contract that releases control after a schedule completes, an escrow that releases on payment confirmation, or a governance contract that executes account operations only after a vote passes. A vesting position can also be sold by transferring the beneficiary's claim without the grantor releasing tokens early or sharing keys -- the assets remain locked in the account while the right to eventually control them changes hands.
 
 ![Control transfer flow](../assets/erc-XXXX/control-transfer-flow.svg)
 
@@ -245,7 +247,7 @@ If `CREATE2` fails (e.g. code already exists at the target address), the entire 
 
 Sponsored deployment is achieved by having the deployer (e.g. a paymaster, relayer, or bundler) call `deployAccount` with the intended recipient as `initialOwner`. The deployer pays gas; the recipient receives the controlling NFT and full root control directly. Account sale and organizational handoff are achieved by the current controller transferring the controlling NFT after deployment.
 
-When account setup requires initialization (e.g. installing validators), the deployer MAY atomically deploy with itself as `initialOwner`, perform setup via `execute` or `executeBatch`, and transfer the controlling NFT to the intended recipient, all within a single transaction.
+When account setup requires initialization (e.g. installing validators), the deployer MAY atomically deploy with itself as `initialOwner`, perform setup via `execute` or `executeBatch`, and transfer the controlling NFT to the intended recipient, all within a single transaction. This enables preconfigured account packages: an organization can prepare a fully configured account -- with validators, child-account structure, protocol integrations, and app-specific approvals -- and hand it to a new team member, partner, or customer through a single NFT transfer.
 
 ### Ownership/control linkage
 
@@ -781,8 +783,9 @@ This flow applies equally to key rotation, account sale, gift, or organizational
 2. `P` acquires controlling tokens `T_C1` and `T_C2` for child accounts `C1` and `C2`.
 3. Because `ownerOf(T_C1) == P` and `ownerOf(T_C2) == P`, `P` is the root controller of both child accounts.
 4. Alice can cause `P` to execute calls to `C1` and `C2` under `P`'s control.
-5. A wallet might display `P` as a folder-like parent containing child accounts and their assets, but `C1` and `C2` remain separate custody addresses.
-6. The hierarchy MAY be extended further by having `C1` or `C2` own additional controlling NFTs for deeper descendants.
+5. Because `P` controls both child accounts, Alice can settle obligations across `C1` and `C2` atomically via `executeBatch` on `P` -- netting positions, rebalancing assets, or sweeping funds between child accounts in a single transaction.
+6. A wallet might display `P` as a folder-like parent containing child accounts and their assets, but `C1` and `C2` remain separate custody addresses.
+7. The hierarchy MAY be extended further by having `C1` or `C2` own additional controlling NFTs for deeper descendants.
 
 #### Withdraw from a privacy pool with sponsored gas
 
