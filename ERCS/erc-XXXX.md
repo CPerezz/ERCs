@@ -1,7 +1,7 @@
 ---
 eip: XXXX
-title: NFT-Controlled Account Abstraction
-description: An NFT-controlled smart account using ERC-721 ownership for root control.
+title: Wallet Title Deeds
+description: ERC-721 title deeds of smart accounts - whoever holds the deed operates the account; transfer rotates control without moving assets or sharing keys.
 author: Ben Adams (@benaadams), Tim Seaward (@Drawaes), Artemis Black (@artblack7), Carlos Perez (@CPerezz), Giulio Rebuffo (@Giulio2002)
 discussions-to: https://ethereum-magicians.org/t/erc-XXXX-nft-controlled-account-abstraction/
 status: Draft
@@ -843,6 +843,12 @@ Theft of the controlling NFT is account takeover. The controller token MUST be t
 
 Risk isolation between multiple accounts under a single controller does not protect against compromise or loss of the controller itself. If the EOA or owner account holding the controller NFTs is compromised, the attacker gains root control over every account whose controller token that address holds. If the owner's keys are lost and no recovery mechanism has been configured, all controlled accounts become permanently inaccessible. The approval-scoped isolation described in this ERC protects accounts from each other's token-level approvals - it does not protect them from a shared root-control failure. Users who require stronger isolation at the root-control layer SHOULD hold controller tokens in separate owner accounts, use a multisig or threshold scheme as the owner, or configure social recovery before it is needed.
 
+[EIP-7702](./eip-7702) changes the risk profile of EOA owners materially. A delegated EOA still appears as the same `ownerOf(tokenId)` address, but it behaves as a programmable account whose delegated code can change without any controller-token transfer or `controlVersionOf(tokenId)` increment. For threat-model purposes, a 7702-delegated EOA SHOULD be treated as a mutable contract owner, not as a plain key-held EOA. Compatibility with [EIP-7702](./eip-7702) therefore means this ERC can be controlled by such an owner type; it does not mean that delegated EOAs preserve the security assumptions of ordinary EOAs.
+
+This matters because the delegation indicator is installed before transaction execution begins and is not rolled back if the transaction later reverts. A controller can therefore become delegated and use that delegated authority in the same overall transaction flow. Third parties can also trigger calls into an already delegated EOA without possessing the EOA's private key. As a result, the controller token's transfer lock protects the NFT from immediate transfer theft, but it does not protect assets already held in the controlled account from malicious owner-side delegated execution while the token remains locked.
+
+Owner-side delegation changes do not increment `controlVersionOf(tokenId)`. Any validators installed by delegated code remain active until `resetDelegations(tokenId)` is called, and any token-level approvals granted by delegated code remain active until they are explicitly revoked on the relevant token contracts. Users recovering from an unwanted owner-side delegation SHOULD treat revocation of the 7702 delegation as only the first cleanup step; they SHOULD also reset delegated validators, revoke standing approvals, and verify the configured `unlockDelay`.
+
 The transfer lock mechanism mitigates accidental or unauthorized control rotation. Because controller tokens are minted locked, require an explicit `proposeUnlock` plus `completeUnlock` flow before they become transferable, and immediately re-lock on transfer, [ERC-721](./eip-721) single-token approvals cannot by themselves trigger a transfer, and `setApprovalForAll` is forbidden. The transfer approval version is incremented on every `proposeUnlock`, `lock`, and successful transfer, which automatically invalidates all prior single-token approvals. This eliminates the risk of stale approvals becoming active when the owner prepares the token for transfer: any approval granted before the unlock proposal is no longer recognized. The owner must explicitly re-approve after initiating unlock if delegated transfer is desired.
 
 The asymmetric `setUnlockDelay` semantics (defined in the Transfer lock section) are load-bearing for the sell-and-drain mitigation. Counterparties who inspect `pendingUnlockDelayOf(tokenId)` and recent `UnlockDelayChangePending` logs before purchase MAY rely on the current effective `unlockDelay` as a commitment that has held for at least that many seconds, because a decrease cannot take effect faster than the old delay and a pending decrease is observable on-chain from the moment it is scheduled. Wallets and marketplaces SHOULD display `pendingUnlockDelayOf(tokenId)` alongside `unlockDelayOf(tokenId)` so that a scheduled decrease is visible to buyers during the pending window.
@@ -865,6 +871,8 @@ Signature malleability matters wherever ECDSA is used. Implementations MUST reje
 
 Reentrancy risk is inherent in arbitrary execution. `execute` and `executeBatch` call arbitrary targets. Implementations SHOULD ensure that sensitive state transitions, such as validator installation state or recovery-related state, cannot be corrupted by reentrant execution.
 
+Implementations MUST NOT rely on `tx.origin`-style heuristics or on the assumption that an EOA owner is necessarily non-programmable. [EIP-7702](./eip-7702) explicitly breaks some historical EOA invariants, including the assumption that only the top frame can have `tx.origin == msg.sender`. This ERC's authorization model is intentionally based on `msg.sender == ownerOf(tokenId)` and version-scoped delegated authority rather than on any stronger claim about the owner's execution environment.
+
 Batching hazards are substantial. Atomicity avoids partially completed multi-step workflows, but the content of the batch can still create risky approval-before-use patterns, downstream callback surfaces, and hidden ordering assumptions. An `approve + swap` batch is safer than two transactions in some respects, but it still requires careful target and amount selection.
 
 Upgradeability adds trust assumptions. Upgradeability is not core to this ERC. If implemented, upgrade authority can change execution, validation, or asset-handling logic and therefore can seize or brick the wallet. Implementations SHOULD prefer immutable logic or clearly disclosed upgrade paths.
@@ -876,6 +884,8 @@ Compliant accounts MUST NOT include a reachable `SELFDESTRUCT` path. Because dep
 FOCIL coverage applies to the direct-owner execution path. Direct owner transactions are public-mempool objects and can participate in [EIP-7805](./eip-7805) inclusion lists.
 
 Social recovery abuse remains possible. Guardians can collude, coerce, or exploit poor delay and threshold settings. Because compliant recovery ends in NFT transfer, compromise of recovery is functionally equivalent to theft of the controlling NFT. Recovery systems SHOULD include delay, cancellation, and high-visibility events.
+
+Security-sensitive implementations MAY choose stricter owner-environment policies. For example, an implementation MAY reject execution when `ownerOf(tokenId)` is a 7702-delegated EOA, or MAY pin and monitor an expected owner `EXTCODEHASH` / owner-code class for the current control version and reject execution when that environment changes unexpectedly. Such stricter modes trade flexibility for safety and are particularly appropriate for high-value deployments that do not want mutable owner-side code.
 
 Because deployment is atomic (mint and `CREATE2` in one transaction), there is no window in which a controller token exists without a deployed account. Assets sent to an address before deployment land at a codeless address with no controller token; the deployer who later creates an account at that address receives those assets under their control. Users SHOULD NOT send assets to predicted addresses before deployment unless they trust the deployer.
 
@@ -948,7 +958,7 @@ Implementations that support [ERC-1271](./eip-1271) SHOULD verify root-controlle
 
 Implementations that support [ERC-6492](./eip-6492) SHOULD ensure the wrapper invokes the factory's `deployAccount` with the intended `initialOwner`.
 
-Implementations that support [EIP-7702](./eip-7702)-aware or [EIP-8202](./eip-8202)-aware owners SHOULD document that those owner-account models affect only how the owner originates transactions. The custody wallet under this ERC remains the separate contract account.
+Implementations that support [EIP-7702](./eip-7702)-aware or [EIP-8202](./eip-8202)-aware owners SHOULD document that those owner-account models affect the root controller's execution environment, while the custody wallet under this ERC remains the separate contract account. In particular, [EIP-7702](./eip-7702)-delegated EOAs should be described to users as programmable owner accounts, not as ordinary EOAs with unchanged trust assumptions.
 
 Implementations that additionally support [ERC-4337](./eip-4337) SHOULD bind `UserOperation` authorization to the current control version so that NFT transfers invalidate pending operations. When [ERC-4337](./eip-4337) account setup requires initialization, the deployer MAY atomically deploy with itself as `initialOwner`, perform setup via `execute` or `executeBatch`, and transfer the controlling NFT to the intended recipient, all within a single transaction.
 
